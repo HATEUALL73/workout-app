@@ -241,8 +241,10 @@ const styles = StyleSheet.create({
   },
   fire: {
     position: 'absolute',
-    right: 8,
+    right: 10,
+    top: 0,
     fontSize: 16,
+    lineHeight: 52, // = minHeight поля, чтобы значок был по центру по вертикали
   },
   setIndex: {
     color: colors.text,
@@ -252,10 +254,12 @@ const styles = StyleSheet.create({
   input: {
     backgroundColor: colors.surfaceElevated,
     borderRadius: 10,
+    minHeight: 52,
     paddingVertical: 12,
     paddingHorizontal: 14,
     color: colors.text,
-    fontSize: 16,
+    fontSize: 18,
+    fontWeight: '600',
     textAlign: 'center',
     borderWidth: 1,
     borderColor: 'transparent', // зарезервировано, чтобы рамка рекорда не сдвигала вёрстку
@@ -268,7 +272,7 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 8,
+    marginTop: 12,
   },
   button: {
     flex: 1,
@@ -276,6 +280,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
+    minHeight: 52,
     paddingVertical: 14,
     borderRadius: 12,
   },

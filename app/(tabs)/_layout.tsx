@@ -13,10 +13,12 @@ export default function TabsLayout() {
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopColor: colors.surfaceElevated,
+          paddingTop: 6,
         },
+        tabBarLabelStyle: { fontSize: 13, fontWeight: '600' },
         headerStyle: { backgroundColor: colors.surface },
         headerTintColor: colors.text,
-        headerTitleStyle: { fontWeight: '700' },
+        headerTitleStyle: { fontWeight: '700', fontSize: 20 },
         sceneStyle: { backgroundColor: colors.background },
       }}
     >

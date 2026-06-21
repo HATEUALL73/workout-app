@@ -61,7 +61,7 @@ export default function ProgressScreen() {
               <StatCard label="Текущий вес" value={`${formatWeight(stats.current)} кг`} />
               <StatCard
                 label="Прибавка"
-                value={`${stats.gain >= 0 ? '+' : ''}${formatWeight(stats.gain)} кг`}
+                value={`${stats.gain > 0 ? '+' : ''}${formatWeight(stats.gain)} кг`}
                 highlight={stats.gain > 0}
               />
               <StatCard label="Максимум" value={`${formatWeight(stats.max)} кг`} />

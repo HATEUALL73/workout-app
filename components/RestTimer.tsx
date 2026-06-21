@@ -32,6 +32,7 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
   const [running, setRunning] = useState(false);
 
   const endRef = useRef(0); // timestamp окончания (мс)
+  const firedRef = useRef(false); // защита от повторного сигнала окончания
   const player = useAudioPlayer(beepSource);
 
   // Разрешаем звук даже в беззвучном режиме телефона.
@@ -54,7 +55,10 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
       if (left <= 0) {
         setRemaining(0);
         setRunning(false);
-        finish();
+        if (!firedRef.current) {
+          firedRef.current = true;
+          finish();
+        }
       } else {
         setRemaining(left);
       }
@@ -65,6 +69,7 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
   const start = () => {
     // Если время вышло — начинаем заново с полного.
     const from = remaining <= 0 ? total : remaining;
+    firedRef.current = false;
     setRemaining(from);
     endRef.current = Date.now() + from * 1000;
     setRunning(true);
@@ -74,11 +79,13 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
 
   const reset = () => {
     setRunning(false);
+    firedRef.current = false;
     setRemaining(total);
   };
 
   const selectPreset = (preset: number) => {
     setRunning(false);
+    firedRef.current = false;
     setTotal(preset);
     setRemaining(preset);
   };
@@ -156,10 +163,12 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   preset: {
-    paddingVertical: 10,
+    minWidth: 56,
+    paddingVertical: 14,
     paddingHorizontal: 16,
     borderRadius: 10,
     backgroundColor: colors.surface,
+    alignItems: 'center',
   },
   presetActive: {
     backgroundColor: colors.accent,
