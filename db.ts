@@ -90,10 +90,17 @@ const DATABASE_NAME = 'workout.db';
 const DATABASE_VERSION = 1;
 
 let db: SQLite.SQLiteDatabase | null = null;
+let migrated = false;
 
 function getDb(): SQLite.SQLiteDatabase {
   if (!db) {
     db = SQLite.openDatabaseSync(DATABASE_NAME);
+  }
+  // Гарантируем, что схема и seed применены до первого же запроса —
+  // эффекты экранов срабатывают раньше эффекта корневого layout.
+  if (!migrated) {
+    migrated = true;
+    migrate(db);
   }
   return db;
 }
@@ -138,10 +145,14 @@ function mapDraft(r: DraftRow): DraftSet {
 /**
  * Создаёт схему и заполняет программу тренировок при первом запуске.
  * Идемпотентна: повторные вызовы ничего не делают (контроль через user_version).
- * Вызывать один раз при старте приложения.
+ * Можно вызвать явно при старте, но и любой запрос инициализирует БД лениво.
  */
 export function initDatabase(): void {
-  const database = getDb();
+  getDb();
+}
+
+/** Применяет миграции и единоразовый seed. Вызывается лениво из getDb(). */
+function migrate(database: SQLite.SQLiteDatabase): void {
   // WAL ускоряет одновременное чтение/запись и безопаснее при выходе из приложения.
   database.execSync('PRAGMA journal_mode = WAL;');
   database.execSync('PRAGMA foreign_keys = ON;');
@@ -372,6 +383,16 @@ function seedExercises(database: SQLite.SQLiteDatabase): void {
       );
     }
   });
+}
+
+// --- Вспомогательное ---------------------------------------------------------
+
+/** Сегодняшняя дата в формате 'YYYY-MM-DD' (локальное время). */
+export function todayISO(): string {
+  const d = new Date();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
 }
 
 // --- Упражнения --------------------------------------------------------------
