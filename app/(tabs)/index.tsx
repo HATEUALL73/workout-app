@@ -7,20 +7,30 @@ import { ExerciseCard, type SetField, type SetInputState } from '../../component
 import {
   getDraftForExercise,
   getExercisesByDay,
+  getLatestLog,
+  getLogsForExercise,
   logCompletedExercise,
   saveDraftSet,
   todayISO,
   type Exercise,
+  type LogEntry,
   type SetInput,
   type WorkoutDay,
 } from '../../db';
+import { parseNum } from '../../format';
 import { colors } from '../../theme/colors';
 
-// Преобразует строку поля в число (учитывает запятую как разделитель).
-// Пустая/некорректная строка -> null.
-function parseNum(value: string): number | null {
-  const n = parseFloat(value.replace(',', '.'));
-  return Number.isFinite(n) ? n : null;
+/** Ориентиры по упражнению: последняя запись и рекорд по весу. */
+type ExerciseStats = { last: LogEntry | null; record: LogEntry | null };
+
+// Считает «прошлый раз» и «рекорд» для упражнения.
+function computeStats(exerciseId: number): ExerciseStats {
+  const last = getLatestLog(exerciseId);
+  let record: LogEntry | null = null;
+  for (const log of getLogsForExercise(exerciseId)) {
+    if (record == null || log.weight > record.weight) record = log;
+  }
+  return { last, record };
 }
 
 // Пустой набор подходов для упражнения (по числу подходов в программе).
@@ -45,17 +55,21 @@ export default function WorkoutScreen() {
   const [day, setDay] = useState<WorkoutDay>('mon');
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [inputs, setInputs] = useState<Record<number, SetInputState[]>>({});
+  const [stats, setStats] = useState<Record<number, ExerciseStats>>({});
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  // При смене дня перечитываем упражнения и их черновики.
+  // При смене дня перечитываем упражнения, черновики и ориентиры.
   useEffect(() => {
     const list = getExercisesByDay(day);
     setExercises(list);
-    const map: Record<number, SetInputState[]> = {};
+    const inputMap: Record<number, SetInputState[]> = {};
+    const statsMap: Record<number, ExerciseStats> = {};
     for (const ex of list) {
-      map[ex.id] = loadSets(ex);
+      inputMap[ex.id] = loadSets(ex);
+      statsMap[ex.id] = computeStats(ex.id);
     }
-    setInputs(map);
+    setInputs(inputMap);
+    setStats(statsMap);
     setExpandedId(null);
   }, [day]);
 
@@ -90,6 +104,8 @@ export default function WorkoutScreen() {
     const log = logCompletedExercise(exercise.id, todayISO(), sets);
     // logCompletedExercise очищает черновик упражнения — сбрасываем и поля.
     setInputs((prev) => ({ ...prev, [exercise.id]: emptySets(exercise.sets) }));
+    // Обновляем ориентиры (прошлый раз/рекорд) после новой записи.
+    setStats((prev) => ({ ...prev, [exercise.id]: computeStats(exercise.id) }));
     setExpandedId(null);
 
     if (log) {
@@ -113,6 +129,8 @@ export default function WorkoutScreen() {
             expanded={expandedId === exercise.id}
             onToggle={() => setExpandedId(expandedId === exercise.id ? null : exercise.id)}
             sets={inputs[exercise.id] ?? emptySets(exercise.sets)}
+            last={stats[exercise.id]?.last ?? null}
+            record={stats[exercise.id]?.record ?? null}
             onChangeSet={(setIndex, field, value) =>
               handleChangeSet(exercise.id, setIndex, field, value)
             }

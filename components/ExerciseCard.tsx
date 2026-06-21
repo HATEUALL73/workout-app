@@ -1,7 +1,8 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import type { Exercise } from '../db';
+import type { Exercise, LogEntry } from '../db';
+import { formatWeight, parseNum } from '../format';
 import { colors } from '../theme/colors';
 
 /** Локальное состояние ввода одного подхода (строки из полей ввода). */
@@ -18,6 +19,10 @@ type Props = {
   onToggle: () => void;
   /** Значения подходов, длина массива = exercise.sets. */
   sets: SetInputState[];
+  /** Последняя запись («прошлый раз») или null, если истории нет. */
+  last: LogEntry | null;
+  /** Запись с максимальным весом («рекорд») или null. */
+  record: LogEntry | null;
   onChangeSet: (setIndex: number, field: SetField, value: string) => void;
   onRest: () => void;
   onDone: () => void;
@@ -28,10 +33,21 @@ export function ExerciseCard({
   expanded,
   onToggle,
   sets,
+  last,
+  record,
   onChangeSet,
   onRest,
   onDone,
 }: Props) {
+  const recordWeight = record?.weight ?? null;
+
+  // Введённый вес бьёт рекорд: если рекорда нет — любой положительный вес.
+  const isNewRecord = (weightInput: string): boolean => {
+    const w = parseNum(weightInput);
+    if (w == null) return false;
+    return recordWeight == null ? w > 0 : w > recordWeight;
+  };
+
   return (
     <View style={[styles.card, exercise.danger && styles.cardDanger]}>
       {/* Шапка карточки — тап разворачивает/сворачивает */}
@@ -46,6 +62,21 @@ export function ExerciseCard({
           <Text style={styles.subtitle}>
             {exercise.sets}×{exercise.reps} · отдых {exercise.restSeconds}с
           </Text>
+          {/* Ориентир — виден всегда, без раскрытия карточки */}
+          <View style={styles.orientir}>
+            <Text style={styles.orientirItem}>
+              прошлый раз:{' '}
+              <Text style={styles.orientirValue}>
+                {last ? `${formatWeight(last.weight)}×${last.reps}` : '—'}
+              </Text>
+            </Text>
+            <Text style={styles.orientirItem}>
+              рекорд:{' '}
+              <Text style={styles.orientirValue}>
+                {record ? `${formatWeight(record.weight)}×${record.reps}` : '—'}
+              </Text>
+            </Text>
+          </View>
         </View>
         <Ionicons
           name={expanded ? 'chevron-up' : 'chevron-down'}
@@ -61,33 +92,45 @@ export function ExerciseCard({
 
           {/* Поля ввода по каждому подходу */}
           <View style={styles.setsHeader}>
-            <Text style={[styles.setLabel, styles.setIndexCol]}>Подход</Text>
-            <Text style={[styles.setLabel, styles.setInputCol]}>Вес, кг</Text>
-            <Text style={[styles.setLabel, styles.setInputCol]}>Повт.</Text>
+            <Text style={[styles.setLabel, styles.colIndex]}>Подход</Text>
+            <Text style={[styles.setLabel, styles.colInput]}>Вес, кг</Text>
+            <Text style={[styles.setLabel, styles.colInput]}>Повт.</Text>
           </View>
-          {sets.map((set, index) => (
-            <View key={index} style={styles.setRow}>
-              <Text style={[styles.setIndex, styles.setIndexCol]}>{index + 1}</Text>
-              <TextInput
-                style={[styles.input, styles.setInputCol]}
-                value={set.weight}
-                onChangeText={(v) => onChangeSet(index, 'weight', v)}
-                keyboardType="decimal-pad"
-                placeholder="0"
-                placeholderTextColor={colors.textMuted}
-                selectionColor={colors.accent}
-              />
-              <TextInput
-                style={[styles.input, styles.setInputCol]}
-                value={set.reps}
-                onChangeText={(v) => onChangeSet(index, 'reps', v)}
-                keyboardType="number-pad"
-                placeholder="0"
-                placeholderTextColor={colors.textMuted}
-                selectionColor={colors.accent}
-              />
-            </View>
-          ))}
+          {sets.map((set, index) => {
+            const record = isNewRecord(set.weight);
+            return (
+              <View key={index} style={styles.setRow}>
+                <Text style={[styles.setIndex, styles.colIndex]}>{index + 1}</Text>
+                <View style={styles.colInput}>
+                  <TextInput
+                    style={[styles.input, record && styles.inputRecord]}
+                    value={set.weight}
+                    onChangeText={(v) => onChangeSet(index, 'weight', v)}
+                    keyboardType="decimal-pad"
+                    placeholder="0"
+                    placeholderTextColor={colors.textMuted}
+                    selectionColor={colors.accent}
+                  />
+                  {record && (
+                    <Text style={styles.fire} pointerEvents="none">
+                      🔥
+                    </Text>
+                  )}
+                </View>
+                <View style={styles.colInput}>
+                  <TextInput
+                    style={styles.input}
+                    value={set.reps}
+                    onChangeText={(v) => onChangeSet(index, 'reps', v)}
+                    keyboardType="number-pad"
+                    placeholder="0"
+                    placeholderTextColor={colors.textMuted}
+                    selectionColor={colors.accent}
+                  />
+                </View>
+              </View>
+            );
+          })}
 
           {/* Кнопки действий */}
           <View style={styles.actions}>
@@ -145,6 +188,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 4,
   },
+  orientir: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 16,
+    marginTop: 6,
+  },
+  orientirItem: {
+    color: colors.textMuted,
+    fontSize: 13,
+  },
+  orientirValue: {
+    color: colors.text,
+    fontWeight: '700',
+  },
   body: {
     paddingHorizontal: 16,
     paddingBottom: 16,
@@ -174,12 +231,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 10,
   },
-  setIndexCol: {
+  colIndex: {
     width: 64,
   },
-  setInputCol: {
+  colInput: {
     flex: 1,
     marginLeft: 8,
+    justifyContent: 'center',
+  },
+  fire: {
+    position: 'absolute',
+    right: 8,
+    fontSize: 16,
   },
   setIndex: {
     color: colors.text,
@@ -194,6 +257,13 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 16,
     textAlign: 'center',
+    borderWidth: 1,
+    borderColor: 'transparent', // зарезервировано, чтобы рамка рекорда не сдвигала вёрстку
+  },
+  inputRecord: {
+    borderColor: colors.accent,
+    color: colors.accent,
+    fontWeight: '700',
   },
   actions: {
     flexDirection: 'row',

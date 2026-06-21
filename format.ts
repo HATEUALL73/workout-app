@@ -19,6 +19,12 @@ export function formatWeight(weight: number): string {
   return Number.isInteger(weight) ? String(weight) : weight.toFixed(1);
 }
 
+/** Разбирает строку поля ввода в число (запятая как разделитель). Пусто/мусор -> null. */
+export function parseNum(value: string): number | null {
+  const n = parseFloat(value.replace(',', '.'));
+  return Number.isFinite(n) ? n : null;
+}
+
 /** Короткая метка дня для UI. */
 export function dayLabel(day: WorkoutDay): string {
   switch (day) {
