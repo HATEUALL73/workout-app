@@ -97,9 +97,9 @@ export default function WorkoutScreen() {
     }
   };
 
-  // Кнопка таймера отдыха: переходим на вкладку «Таймер» с нужным временем.
+  // Кнопка таймера отдыха: открываем оверлей таймера поверх тренировки.
   const handleRest = (exercise: Exercise) => {
-    router.push(`/timer?seconds=${exercise.restSeconds}`);
+    router.push(`/timer-overlay?seconds=${exercise.restSeconds}`);
   };
 
   return (
