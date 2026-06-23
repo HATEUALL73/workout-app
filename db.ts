@@ -206,12 +206,20 @@ const MIGRATIONS: Migration[] = [
     },
   },
 
+  {
+    // v2 — необязательная заметка к записи лога.
+    // Аддитивно: у существующих записей note получит DEFAULT ''.
+    toVersion: 2,
+    up: (db) => {
+      db.execSync(`ALTER TABLE logs ADD COLUMN note TEXT NOT NULL DEFAULT ''`);
+    },
+  },
+
   // --- Пример будущей миграции (раскомментируйте и адаптируйте) ---
   // {
-  //   toVersion: 2,
+  //   toVersion: 3,
   //   up: (db) => {
-  //     // Добавляем колонку без потери данных: у старых записей будет DEFAULT.
-  //     db.execSync(`ALTER TABLE logs ADD COLUMN note TEXT NOT NULL DEFAULT ''`);
+  //     db.execSync(`ALTER TABLE exercises ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
   //   },
   // },
 ];
