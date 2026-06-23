@@ -87,7 +87,6 @@ interface DraftRow {
 // --- Открытие БД (ленивый синглтон) ----------------------------------------
 
 const DATABASE_NAME = 'workout.db';
-const DATABASE_VERSION = 1;
 
 let db: SQLite.SQLiteDatabase | null = null;
 let migrated = false;
@@ -140,64 +139,117 @@ function mapDraft(r: DraftRow): DraftSet {
   };
 }
 
-// --- Инициализация: миграции + единоразовый seed -----------------------------
+// --- Версионирование схемы и пошаговые миграции ------------------------------
 
 /**
- * Создаёт схему и заполняет программу тренировок при первом запуске.
- * Идемпотентна: повторные вызовы ничего не делают (контроль через user_version).
- * Можно вызвать явно при старте, но и любой запрос инициализирует БД лениво.
+ * Один шаг миграции: переводит схему из версии (toVersion - 1) в toVersion.
+ * `up` выполняется ВНУТРИ транзакции (при ошибке весь шаг откатывается) и НЕ должен
+ * открывать собственную транзакцию. Меняйте структуру так, чтобы НЕ терять данные
+ * пользователя (логи, черновики, история).
+ */
+type Migration = {
+  toVersion: number;
+  up: (db: SQLite.SQLiteDatabase) => void;
+};
+
+/**
+ * Список миграций строго по возрастанию версии (1, 2, 3, ...).
+ *
+ * КАК ДОБАВИТЬ НОВУЮ МИГРАЦИЮ:
+ *   1. Допишите В КОНЕЦ массива объект { toVersion: <следующее число>, up: (db) => {...} }.
+ *   2. В `up` меняйте схему: ALTER TABLE для добавления колонок (с DEFAULT, чтобы
+ *      старые строки остались валидными) или CREATE TABLE для новых таблиц.
+ *      Для несовместимых изменений (смена типа/удаление колонки) применяйте паттерн:
+ *      создать новую таблицу → INSERT ... SELECT из старой → DROP старой → ALTER RENAME.
+ *   3. Больше ничего не трогайте: целевая версия и запуск нужных шагов считаются сами.
+ *      УЖЕ ВЫШЕДШИЕ миграции не редактируйте — только добавляйте новые в конец,
+ *      иначе у пользователей с прежней версией схема разойдётся.
+ */
+const MIGRATIONS: Migration[] = [
+  {
+    // v1 — исходная схема + наполнение программой тренировок.
+    toVersion: 1,
+    up: (db) => {
+      db.execSync(`
+        CREATE TABLE exercises (
+          id           INTEGER PRIMARY KEY NOT NULL,
+          day          TEXT    NOT NULL,
+          position     INTEGER NOT NULL,
+          name         TEXT    NOT NULL,
+          sets         INTEGER NOT NULL,
+          reps         TEXT    NOT NULL,
+          rest_seconds INTEGER NOT NULL,
+          note         TEXT    NOT NULL DEFAULT '',
+          danger       INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE logs (
+          id          INTEGER PRIMARY KEY NOT NULL,
+          exercise_id INTEGER NOT NULL,
+          date        TEXT    NOT NULL,
+          weight      REAL    NOT NULL,
+          reps        INTEGER NOT NULL,
+          FOREIGN KEY (exercise_id) REFERENCES exercises (id)
+        );
+
+        CREATE INDEX idx_logs_exercise ON logs (exercise_id, date);
+
+        CREATE TABLE draft (
+          exercise_id INTEGER NOT NULL,
+          set_index   INTEGER NOT NULL,
+          weight      REAL,
+          reps        INTEGER,
+          PRIMARY KEY (exercise_id, set_index)
+        );
+      `);
+      seedExercises(db);
+    },
+  },
+
+  // --- Пример будущей миграции (раскомментируйте и адаптируйте) ---
+  // {
+  //   toVersion: 2,
+  //   up: (db) => {
+  //     // Добавляем колонку без потери данных: у старых записей будет DEFAULT.
+  //     db.execSync(`ALTER TABLE logs ADD COLUMN note TEXT NOT NULL DEFAULT ''`);
+  //   },
+  // },
+];
+
+/** Актуальная версия схемы — целевая версия последней миграции. */
+const SCHEMA_VERSION = MIGRATIONS.length > 0 ? MIGRATIONS[MIGRATIONS.length - 1].toVersion : 0;
+
+// --- Инициализация -----------------------------------------------------------
+
+/**
+ * Доводит схему до актуальной версии, применяя недостающие миграции по порядку.
+ * Идемпотентна. Можно вызвать явно при старте, но любой запрос инициализирует БД лениво.
  */
 export function initDatabase(): void {
   getDb();
 }
 
-/** Применяет миграции и единоразовый seed. Вызывается лениво из getDb(). */
+/** Запускает недостающие миграции по нарастающей. Вызывается лениво из getDb(). */
 function migrate(database: SQLite.SQLiteDatabase): void {
-  // WAL ускоряет одновременное чтение/запись и безопаснее при выходе из приложения.
+  // PRAGMA выполняются ВНЕ транзакции: WAL — надёжность/скорость записи,
+  // foreign_keys — контроль ссылочной целостности.
   database.execSync('PRAGMA journal_mode = WAL;');
   database.execSync('PRAGMA foreign_keys = ON;');
 
   const versionRow = database.getFirstSync<{ user_version: number }>('PRAGMA user_version');
-  const currentVersion = versionRow?.user_version ?? 0;
-  if (currentVersion >= DATABASE_VERSION) return;
+  let currentVersion = versionRow?.user_version ?? 0;
+  if (currentVersion >= SCHEMA_VERSION) return;
 
-  if (currentVersion === 0) {
-    database.execSync(`
-      CREATE TABLE exercises (
-        id           INTEGER PRIMARY KEY NOT NULL,
-        day          TEXT    NOT NULL,
-        position     INTEGER NOT NULL,
-        name         TEXT    NOT NULL,
-        sets         INTEGER NOT NULL,
-        reps         TEXT    NOT NULL,
-        rest_seconds INTEGER NOT NULL,
-        note         TEXT    NOT NULL DEFAULT '',
-        danger       INTEGER NOT NULL DEFAULT 0
-      );
-
-      CREATE TABLE logs (
-        id          INTEGER PRIMARY KEY NOT NULL,
-        exercise_id INTEGER NOT NULL,
-        date        TEXT    NOT NULL,
-        weight      REAL    NOT NULL,
-        reps        INTEGER NOT NULL,
-        FOREIGN KEY (exercise_id) REFERENCES exercises (id)
-      );
-
-      CREATE INDEX idx_logs_exercise ON logs (exercise_id, date);
-
-      CREATE TABLE draft (
-        exercise_id INTEGER NOT NULL,
-        set_index   INTEGER NOT NULL,
-        weight      REAL,
-        reps        INTEGER,
-        PRIMARY KEY (exercise_id, set_index)
-      );
-    `);
-    seedExercises(database);
+  for (const migration of MIGRATIONS) {
+    if (migration.toVersion <= currentVersion) continue;
+    // Шаг схемы и фиксация новой версии — атомарно: при ошибке откатывается всё,
+    // user_version не сдвинется, и при следующем запуске шаг повторится с чистого листа.
+    database.withTransactionSync(() => {
+      migration.up(database);
+      database.execSync(`PRAGMA user_version = ${migration.toVersion}`);
+    });
+    currentVersion = migration.toVersion;
   }
-
-  database.execSync(`PRAGMA user_version = ${DATABASE_VERSION}`);
 }
 
 // --- Seed: программа тренировок из CONTEXT.md --------------------------------
@@ -363,26 +415,28 @@ const SEED_EXERCISES: ExerciseSeed[] = [
   },
 ];
 
-/** Заполняет таблицу exercises всей программой (вызывается один раз из initDatabase). */
+/**
+ * Заполняет таблицу exercises всей программой.
+ * Вызывается из миграции v1, которая уже выполняется внутри транзакции,
+ * поэтому собственную транзакцию здесь НЕ открываем (вложенные не поддерживаются).
+ */
 function seedExercises(database: SQLite.SQLiteDatabase): void {
-  database.withTransactionSync(() => {
-    for (const ex of SEED_EXERCISES) {
-      database.runSync(
-        `INSERT INTO exercises (day, position, name, sets, reps, rest_seconds, note, danger)
-         VALUES ($day, $position, $name, $sets, $reps, $rest, $note, $danger)`,
-        {
-          $day: ex.day,
-          $position: ex.position,
-          $name: ex.name,
-          $sets: ex.sets,
-          $reps: ex.reps,
-          $rest: ex.restSeconds,
-          $note: ex.note,
-          $danger: ex.danger ? 1 : 0,
-        }
-      );
-    }
-  });
+  for (const ex of SEED_EXERCISES) {
+    database.runSync(
+      `INSERT INTO exercises (day, position, name, sets, reps, rest_seconds, note, danger)
+       VALUES ($day, $position, $name, $sets, $reps, $rest, $note, $danger)`,
+      {
+        $day: ex.day,
+        $position: ex.position,
+        $name: ex.name,
+        $sets: ex.sets,
+        $reps: ex.reps,
+        $rest: ex.restSeconds,
+        $note: ex.note,
+        $danger: ex.danger ? 1 : 0,
+      }
+    );
+  }
 }
 
 // --- Вспомогательное ---------------------------------------------------------
