@@ -23,6 +23,8 @@ type Props = {
   last: LogEntry | null;
   /** Запись с максимальным весом («рекорд») или null. */
   record: LogEntry | null;
+  /** Упражнение уже отмечено «выполнено» сегодня (есть запись в логах за сегодня). */
+  done: boolean;
   onChangeSet: (setIndex: number, field: SetField, value: string) => void;
   onRest: () => void;
   onDone: () => void;
@@ -35,6 +37,7 @@ export function ExerciseCard({
   sets,
   last,
   record,
+  done,
   onChangeSet,
   onRest,
   onDone,
@@ -49,19 +52,32 @@ export function ExerciseCard({
   };
 
   return (
-    <View style={[styles.card, exercise.danger && styles.cardDanger]}>
+    <View style={[styles.card, exercise.danger && styles.cardDanger, done && styles.cardDone]}>
       {/* Шапка карточки — тап разворачивает/сворачивает */}
       <Pressable onPress={onToggle} style={styles.header}>
         <View style={styles.headerText}>
           <View style={styles.titleRow}>
-            {exercise.danger && (
+            {done ? (
+              <Ionicons
+                name="checkmark-circle"
+                size={18}
+                color={colors.success}
+                style={styles.warnIcon}
+              />
+            ) : exercise.danger ? (
               <Ionicons name="warning" size={18} color={colors.accent} style={styles.warnIcon} />
-            )}
+            ) : null}
             <Text style={styles.title}>{exercise.name}</Text>
           </View>
           <Text style={styles.subtitle}>
             {exercise.sets}×{exercise.reps} · отдых {exercise.restSeconds}с
           </Text>
+          {done && (
+            <View style={styles.doneRow}>
+              <Ionicons name="checkmark" size={14} color={colors.success} />
+              <Text style={styles.doneText}>Выполнено сегодня</Text>
+            </View>
+          )}
           {/* Ориентир — виден всегда, без раскрытия карточки */}
           <View style={styles.orientir}>
             <Text style={styles.orientirItem}>
@@ -162,6 +178,10 @@ const styles = StyleSheet.create({
   cardDanger: {
     borderColor: colors.accent,
   },
+  cardDone: {
+    // Имеет приоритет над cardDanger: применяется последним в массиве стилей.
+    borderColor: colors.success,
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -187,6 +207,17 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 14,
     marginTop: 4,
+  },
+  doneRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 6,
+  },
+  doneText: {
+    color: colors.success,
+    fontSize: 13,
+    fontWeight: '700',
   },
   orientir: {
     flexDirection: 'row',

@@ -7,4 +7,5 @@ export const colors = {
   surfaceElevated: '#1e1e25', // приподнятые поверхности
   text: '#f2f2f5', // основной текст
   textMuted: '#8b8b96', // приглушённый текст
+  success: '#34c759', // зелёный — индикатор заполненности подходов
 } as const;

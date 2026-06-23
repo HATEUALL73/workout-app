@@ -118,6 +118,8 @@ export default function WorkoutScreen() {
     router.push(`/timer-overlay?seconds=${exercise.restSeconds}`);
   };
 
+  const today = todayISO();
+
   return (
     <View style={styles.container}>
       <DaySwitcher value={day} onChange={setDay} />
@@ -131,6 +133,7 @@ export default function WorkoutScreen() {
             sets={inputs[exercise.id] ?? emptySets(exercise.sets)}
             last={stats[exercise.id]?.last ?? null}
             record={stats[exercise.id]?.record ?? null}
+            done={stats[exercise.id]?.last?.date === today}
             onChangeSet={(setIndex, field, value) =>
               handleChangeSet(exercise.id, setIndex, field, value)
             }
