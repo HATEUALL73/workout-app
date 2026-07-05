@@ -52,26 +52,22 @@ export function ExerciseCard({
   };
 
   return (
-    <View style={[styles.card, exercise.danger && styles.cardDanger, done && styles.cardDone]}>
+    <View style={[styles.card, done && styles.cardDone, exercise.danger && styles.cardDanger]}>
       {/* Шапка карточки — тап разворачивает/сворачивает */}
       <Pressable onPress={onToggle} style={styles.header}>
         <View style={styles.headerText}>
           <View style={styles.titleRow}>
-            {done ? (
-              <Ionicons
-                name="checkmark-circle"
-                size={18}
-                color={colors.success}
-                style={styles.warnIcon}
-              />
-            ) : exercise.danger ? (
-              <Ionicons name="warning" size={18} color={colors.accent} style={styles.warnIcon} />
-            ) : null}
             <Text style={styles.title}>{exercise.name}</Text>
           </View>
           <Text style={styles.subtitle}>
             {exercise.sets}×{exercise.reps} · отдых {exercise.restSeconds}с
           </Text>
+          {exercise.danger && (
+            <View style={styles.warningRow}>
+              <Ionicons name="warning" size={15} color={colors.accent} />
+              <Text style={styles.warningText}>Осторожно: есть ограничение</Text>
+            </View>
+          )}
           {done && (
             <View style={styles.doneRow}>
               <Ionicons name="checkmark" size={14} color={colors.success} />
@@ -103,8 +99,20 @@ export function ExerciseCard({
 
       {expanded && (
         <View style={styles.body}>
-          {/* Примечание по технике */}
-          <Text style={[styles.note, exercise.danger && styles.noteDanger]}>{exercise.note}</Text>
+          {/* Для ограничений пояснение выделяем отдельно, обычную заметку оставляем текстом. */}
+          {exercise.danger && exercise.note ? (
+            <View style={styles.warningBlock}>
+              <View style={styles.warningBlockHeader}>
+                <Ionicons name="warning" size={17} color={colors.accent} />
+                <Text style={styles.warningBlockTitle}>Почему нужна осторожность</Text>
+              </View>
+              <Text selectable style={styles.warningBlockText}>
+                {exercise.note}
+              </Text>
+            </View>
+          ) : exercise.note ? (
+            <Text style={styles.note}>{exercise.note}</Text>
+          ) : null}
 
           {/* Поля ввода по каждому подходу */}
           <View style={styles.setsHeader}>
@@ -179,7 +187,6 @@ const styles = StyleSheet.create({
     borderColor: colors.accent,
   },
   cardDone: {
-    // Имеет приоритет над cardDanger: применяется последним в массиве стилей.
     borderColor: colors.success,
   },
   header: {
@@ -194,9 +201,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  warnIcon: {
-    marginRight: 6,
-  },
   title: {
     color: colors.text,
     fontSize: 17,
@@ -207,6 +211,17 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 14,
     marginTop: 4,
+  },
+  warningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 6,
+  },
+  warningText: {
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: '700',
   },
   doneRow: {
     flexDirection: 'row',
@@ -243,8 +258,29 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 16,
   },
-  noteDanger: {
+  warningBlock: {
+    gap: 6,
+    padding: 12,
+    marginBottom: 16,
+    backgroundColor: 'rgba(232, 72, 43, 0.1)',
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderRadius: 10,
+  },
+  warningBlockHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  warningBlockTitle: {
     color: colors.accent,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  warningBlockText: {
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 20,
   },
   setsHeader: {
     flexDirection: 'row',
