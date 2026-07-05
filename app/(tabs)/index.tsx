@@ -38,16 +38,31 @@ function emptySets(count: number): SetInputState[] {
   return Array.from({ length: count }, () => ({ weight: '', reps: '' }));
 }
 
-// Загружает значения подходов из черновика (или пустые, если черновика нет).
-function loadSets(exercise: Exercise): SetInputState[] {
+// Загружает черновик или, если его нет, подставляет последний результат во все подходы.
+function loadSets(
+  exercise: Exercise,
+  latestLog: LogEntry | null,
+  today: string
+): SetInputState[] {
   const drafts = getDraftForExercise(exercise.id);
-  return Array.from({ length: exercise.sets }, (_, i) => {
-    const draft = drafts.find((d) => d.setIndex === i);
-    return {
-      weight: draft?.weight != null ? String(draft.weight) : '',
-      reps: draft?.reps != null ? String(draft.reps) : '',
-    };
-  });
+  if (drafts.length > 0) {
+    return Array.from({ length: exercise.sets }, (_, i) => {
+      const draft = drafts.find((d) => d.setIndex === i);
+      return {
+        weight: draft?.weight != null ? String(draft.weight) : '',
+        reps: draft?.reps != null ? String(draft.reps) : '',
+      };
+    });
+  }
+
+  if (latestLog == null || latestLog.date === today) {
+    return emptySets(exercise.sets);
+  }
+
+  return Array.from({ length: exercise.sets }, () => ({
+    weight: String(latestLog.weight),
+    reps: String(latestLog.reps),
+  }));
 }
 
 export default function WorkoutScreen() {
@@ -67,13 +82,14 @@ export default function WorkoutScreen() {
     const inputMap: Record<number, SetInputState[]> = {};
     const statsMap: Record<number, ExerciseStats> = {};
     for (const ex of list) {
-      inputMap[ex.id] = loadSets(ex);
-      statsMap[ex.id] = computeStats(ex.id);
+      const exerciseStats = computeStats(ex.id);
+      statsMap[ex.id] = exerciseStats;
+      inputMap[ex.id] = loadSets(ex, exerciseStats.last, today);
     }
     setInputs(inputMap);
     setStats(statsMap);
     setExpandedId(null);
-  }, [day]);
+  }, [day, today]);
 
   // Изменение поля подхода: обновляем локальное состояние и пишем черновик.
   const handleChangeSet = (exerciseId: number, setIndex: number, field: SetField, value: string) => {
