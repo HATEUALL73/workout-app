@@ -1,14 +1,16 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
+import * as Notifications from 'expo-notifications';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CircularCountdown } from './CircularCountdown';
 import { colors } from '../theme/colors';
 
 const PRESETS = [60, 90, 120, 150];
 const TICK_MS = 100;
+const REST_NOTIFICATION_CHANNEL_ID = 'rest-timer';
 const beepSource = require('../assets/sounds/beep.wav');
 
 // Время в формате m:ss.
@@ -17,6 +19,45 @@ function formatTime(totalSeconds: number): string {
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+// Готовит Android channel и запрашивает разрешение только при необходимости.
+async function ensureNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync(REST_NOTIFICATION_CHANNEL_ID, {
+      name: 'Таймер отдыха',
+      description: 'Уведомления об окончании отдыха между подходами',
+      importance: Notifications.AndroidImportance.HIGH,
+      enableVibrate: true,
+      vibrationPattern: [0, 500, 250, 500],
+      sound: 'default',
+      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    });
+  }
+
+  const current = await Notifications.getPermissionsAsync();
+  if (current.granted) return true;
+
+  const requested = await Notifications.requestPermissionsAsync();
+  return requested.granted;
+}
+
+async function scheduleRestNotification(endTimestamp: number): Promise<string | null> {
+  const permitted = await ensureNotificationPermission();
+  if (!permitted) return null;
+
+  return Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Отдых закончен',
+      body: 'Пора делать следующий подход',
+      sound: 'default',
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: endTimestamp,
+      channelId: Platform.OS === 'android' ? REST_NOTIFICATION_CHANNEL_ID : undefined,
+    },
+  });
 }
 
 type Props = {
@@ -33,6 +74,8 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
 
   const endRef = useRef(0); // timestamp окончания (мс)
   const firedRef = useRef(false); // защита от повторного сигнала окончания
+  const notificationIdRef = useRef<string | null>(null);
+  const notificationOperationRef = useRef(0);
   const player = useAudioPlayer(beepSource);
 
   // Разрешаем звук даже в беззвучном режиме телефона.
@@ -46,6 +89,59 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
     player.seekTo(0);
     player.play();
   }, [player]);
+
+  // Отменяет текущее уведомление и инвалидирует незавершённое планирование.
+  const cancelRestNotification = useCallback(async () => {
+    notificationOperationRef.current += 1;
+    const identifier = notificationIdRef.current;
+    notificationIdRef.current = null;
+    if (identifier) {
+      await Notifications.cancelScheduledNotificationAsync(identifier);
+    }
+  }, []);
+
+  // Планирует одно уведомление. Если за время запроса разрешения таймер
+  // остановили или сбросили, только что созданное уведомление сразу отменяется.
+  const replaceRestNotification = useCallback(async (endTimestamp: number) => {
+    const operation = notificationOperationRef.current + 1;
+    notificationOperationRef.current = operation;
+
+    const previousIdentifier = notificationIdRef.current;
+    notificationIdRef.current = null;
+    if (previousIdentifier) {
+      await Notifications.cancelScheduledNotificationAsync(previousIdentifier);
+    }
+
+    if (notificationOperationRef.current !== operation) return;
+
+    try {
+      const identifier = await scheduleRestNotification(endTimestamp);
+      if (!identifier) {
+        if (notificationOperationRef.current === operation) {
+          Alert.alert(
+            'Уведомления отключены',
+            'Таймер продолжит работать, но не сможет сообщить об окончании на заблокированном экране.'
+          );
+        }
+        return;
+      }
+
+      if (notificationOperationRef.current !== operation) {
+        await Notifications.cancelScheduledNotificationAsync(identifier);
+        return;
+      }
+      notificationIdRef.current = identifier;
+    } catch (error) {
+      console.warn('Не удалось запланировать уведомление таймера отдыха', error);
+    }
+  }, []);
+
+  // Закрытие экрана/оверлея считается отменой текущего таймера.
+  useEffect(() => {
+    return () => {
+      void cancelRestNotification();
+    };
+  }, [cancelRestNotification]);
 
   // Тик отсчёта, пока запущен.
   useEffect(() => {
@@ -71,16 +167,23 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
     const from = remaining <= 0 ? total : remaining;
     firedRef.current = false;
     setRemaining(from);
-    endRef.current = Date.now() + from * 1000;
+    const endTimestamp = Date.now() + from * 1000;
+    endRef.current = endTimestamp;
     setRunning(true);
+    void replaceRestNotification(endTimestamp);
   };
 
-  const pause = () => setRunning(false);
+  const pause = () => {
+    setRunning(false);
+    setRemaining(Math.max(0, (endRef.current - Date.now()) / 1000));
+    void cancelRestNotification();
+  };
 
   const reset = () => {
     setRunning(false);
     firedRef.current = false;
     setRemaining(total);
+    void cancelRestNotification();
   };
 
   const selectPreset = (preset: number) => {
@@ -88,6 +191,7 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
     firedRef.current = false;
     setTotal(preset);
     setRemaining(preset);
+    void cancelRestNotification();
   };
 
   const progress = total > 0 ? remaining / total : 0;
