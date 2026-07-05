@@ -63,17 +63,20 @@ async function scheduleRestNotification(endTimestamp: number): Promise<string | 
 type Props = {
   /** Стартовое время в секундах (например, отдых упражнения). */
   initialSeconds: number;
+  /** Автоматически запустить отсчёт один раз после монтирования. */
+  autoStart?: boolean;
   /** Кнопка закрытия — показывается в режиме оверлея. */
   onClose?: () => void;
 };
 
-export function RestTimer({ initialSeconds, onClose }: Props) {
+export function RestTimer({ initialSeconds, autoStart = false, onClose }: Props) {
   const [total, setTotal] = useState(initialSeconds);
   const [remaining, setRemaining] = useState(initialSeconds);
   const [running, setRunning] = useState(false);
 
   const endRef = useRef(0); // timestamp окончания (мс)
   const firedRef = useRef(false); // защита от повторного сигнала окончания
+  const autoStartedRef = useRef(false);
   const notificationIdRef = useRef<string | null>(null);
   const notificationOperationRef = useRef(0);
   const player = useAudioPlayer(beepSource);
@@ -136,12 +139,39 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
     }
   }, []);
 
+  // Единый путь запуска для ручной кнопки и autoStart.
+  const startCountdown = useCallback(
+    (durationSeconds: number) => {
+      firedRef.current = false;
+      setRemaining(durationSeconds);
+      const endTimestamp = Date.now() + durationSeconds * 1000;
+      endRef.current = endTimestamp;
+      setRunning(true);
+      void replaceRestNotification(endTimestamp);
+    },
+    [replaceRestNotification]
+  );
+
   // Закрытие экрана/оверлея считается отменой текущего таймера.
   useEffect(() => {
     return () => {
       void cancelRestNotification();
     };
   }, [cancelRestNotification]);
+
+  // Одноразовый timeout не даёт пробному effect в React Strict Mode
+  // создать второе системное уведомление.
+  useEffect(() => {
+    if (!autoStart || autoStartedRef.current) return;
+
+    const timeoutId = setTimeout(() => {
+      if (autoStartedRef.current) return;
+      autoStartedRef.current = true;
+      startCountdown(initialSeconds);
+    }, 0);
+
+    return () => clearTimeout(timeoutId);
+  }, [autoStart, initialSeconds, startCountdown]);
 
   // Тик отсчёта, пока запущен.
   useEffect(() => {
@@ -165,12 +195,7 @@ export function RestTimer({ initialSeconds, onClose }: Props) {
   const start = () => {
     // Если время вышло — начинаем заново с полного.
     const from = remaining <= 0 ? total : remaining;
-    firedRef.current = false;
-    setRemaining(from);
-    const endTimestamp = Date.now() + from * 1000;
-    endRef.current = endTimestamp;
-    setRunning(true);
-    void replaceRestNotification(endTimestamp);
+    startCountdown(from);
   };
 
   const pause = () => {

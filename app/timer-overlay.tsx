@@ -18,7 +18,7 @@ export default function TimerOverlay() {
       {/* Тап по затемнённому фону закрывает оверлей */}
       <Pressable style={StyleSheet.absoluteFill} onPress={close} />
       <View style={styles.card}>
-        <RestTimer initialSeconds={initial} onClose={close} />
+        <RestTimer initialSeconds={initial} autoStart onClose={close} />
       </View>
     </View>
   );
