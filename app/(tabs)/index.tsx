@@ -56,7 +56,9 @@ export default function WorkoutScreen() {
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [inputs, setInputs] = useState<Record<number, SetInputState[]>>({});
   const [stats, setStats] = useState<Record<number, ExerciseStats>>({});
+  const [completedSets, setCompletedSets] = useState<Record<number, number>>({});
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const today = todayISO();
 
   // При смене дня перечитываем упражнения, черновики и ориентиры.
   useEffect(() => {
@@ -88,8 +90,13 @@ export default function WorkoutScreen() {
     });
   };
 
-  // «Готово»: сохраняем самый тяжёлый подход в лог и очищаем поля упражнения.
-  const handleDone = (exercise: Exercise) => {
+  // Ручная кнопка отдыха и промежуточный подход используют один маршрут.
+  const handleRest = (exercise: Exercise) => {
+    router.push(`/timer-overlay?seconds=${exercise.restSeconds}`);
+  };
+
+  // Последний подход: сохраняем самый тяжёлый подход в лог и очищаем поля упражнения.
+  const completeExercise = (exercise: Exercise) => {
     const arr = inputs[exercise.id] ?? [];
     const sets: SetInput[] = arr
       .map((s) => ({ weight: parseNum(s.weight), reps: parseNum(s.reps) }))
@@ -106,6 +113,7 @@ export default function WorkoutScreen() {
     setInputs((prev) => ({ ...prev, [exercise.id]: emptySets(exercise.sets) }));
     // Обновляем ориентиры (прошлый раз/рекорд) после новой записи.
     setStats((prev) => ({ ...prev, [exercise.id]: computeStats(exercise.id) }));
+    setCompletedSets((prev) => ({ ...prev, [exercise.id]: 0 }));
     setExpandedId(null);
 
     if (log) {
@@ -113,12 +121,36 @@ export default function WorkoutScreen() {
     }
   };
 
-  // Кнопка таймера отдыха: открываем оверлей таймера поверх тренировки.
-  const handleRest = (exercise: Exercise) => {
-    router.push(`/timer-overlay?seconds=${exercise.restSeconds}`);
-  };
+  // Промежуточный подход остаётся только в состоянии текущей сессии.
+  const handleCompleteSet = (exercise: Exercise) => {
+    if (stats[exercise.id]?.last?.date === today) return;
 
-  const today = todayISO();
+    const completed = completedSets[exercise.id] ?? 0;
+    const currentSet = inputs[exercise.id]?.[completed];
+    const hasCurrentSetData =
+      currentSet != null &&
+      (parseNum(currentSet.weight) != null || parseNum(currentSet.reps) != null);
+
+    if (!hasCurrentSetData) {
+      Alert.alert(
+        'Нет данных',
+        `Введите вес или повторы для подхода ${completed + 1}.`
+      );
+      return;
+    }
+
+    const isLastSet = completed >= exercise.sets - 1;
+    if (isLastSet) {
+      completeExercise(exercise);
+      return;
+    }
+
+    setCompletedSets((prev) => ({
+      ...prev,
+      [exercise.id]: (prev[exercise.id] ?? 0) + 1,
+    }));
+    handleRest(exercise);
+  };
 
   return (
     <View style={styles.container}>
@@ -134,11 +166,12 @@ export default function WorkoutScreen() {
             last={stats[exercise.id]?.last ?? null}
             record={stats[exercise.id]?.record ?? null}
             done={stats[exercise.id]?.last?.date === today}
+            completedSets={completedSets[exercise.id] ?? 0}
             onChangeSet={(setIndex, field, value) =>
               handleChangeSet(exercise.id, setIndex, field, value)
             }
             onRest={() => handleRest(exercise)}
-            onDone={() => handleDone(exercise)}
+            onCompleteSet={() => handleCompleteSet(exercise)}
           />
         ))}
       </ScrollView>

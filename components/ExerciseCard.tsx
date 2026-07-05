@@ -25,9 +25,11 @@ type Props = {
   record: LogEntry | null;
   /** Упражнение уже отмечено «выполнено» сегодня (есть запись в логах за сегодня). */
   done: boolean;
+  /** Количество завершённых подходов в текущей сессии. */
+  completedSets: number;
   onChangeSet: (setIndex: number, field: SetField, value: string) => void;
   onRest: () => void;
-  onDone: () => void;
+  onCompleteSet: () => void;
 };
 
 export function ExerciseCard({
@@ -38,11 +40,18 @@ export function ExerciseCard({
   last,
   record,
   done,
+  completedSets,
   onChangeSet,
   onRest,
-  onDone,
+  onCompleteSet,
 }: Props) {
   const recordWeight = record?.weight ?? null;
+  const isLastSet = completedSets >= exercise.sets - 1;
+  const completeButtonLabel = done
+    ? 'Выполнено'
+    : exercise.sets === 1 || isLastSet
+      ? 'Завершить упражнение'
+      : `Подход ${completedSets + 1}/${exercise.sets} готов`;
 
   // Введённый вес бьёт рекорд: если рекорда нет — любой положительный вес.
   const isNewRecord = (weightInput: string): boolean => {
@@ -162,9 +171,17 @@ export function ExerciseCard({
               <Ionicons name="timer-outline" size={18} color={colors.text} />
               <Text style={styles.buttonText}>Отдых {exercise.restSeconds}с</Text>
             </Pressable>
-            <Pressable onPress={onDone} style={[styles.button, styles.doneButton]}>
-              <Ionicons name="checkmark" size={18} color={colors.text} />
-              <Text style={styles.buttonText}>Готово</Text>
+            <Pressable
+              disabled={done}
+              onPress={onCompleteSet}
+              style={[styles.button, styles.doneButton, done && styles.doneButtonCompleted]}
+            >
+              <Ionicons
+                name={done ? 'checkmark-circle' : 'checkmark'}
+                size={18}
+                color={colors.text}
+              />
+              <Text style={styles.buttonText}>{completeButtonLabel}</Text>
             </Pressable>
           </View>
         </View>
@@ -357,9 +374,15 @@ const styles = StyleSheet.create({
   doneButton: {
     backgroundColor: colors.accent,
   },
+  doneButtonCompleted: {
+    backgroundColor: colors.success,
+    opacity: 0.75,
+  },
   buttonText: {
     color: colors.text,
     fontSize: 15,
     fontWeight: '700',
+    flexShrink: 1,
+    textAlign: 'center',
   },
 });
