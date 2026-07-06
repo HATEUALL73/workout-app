@@ -1,16 +1,19 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import { setAudioModeAsync, useAudioPlayer } from 'expo-audio';
-import * as Notifications from 'expo-notifications';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CircularCountdown } from './CircularCountdown';
+import {
+  areNotificationsAvailable,
+  cancelScheduledRestNotification,
+  scheduleRestNotification,
+} from '../notifications';
 import { colors } from '../theme/colors';
 
 const PRESETS = [60, 90, 120, 150];
 const TICK_MS = 100;
-const REST_NOTIFICATION_CHANNEL_ID = 'rest-timer';
 const beepSource = require('../assets/sounds/beep.wav');
 
 // Время в формате m:ss.
@@ -19,45 +22,6 @@ function formatTime(totalSeconds: number): string {
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${String(sec).padStart(2, '0')}`;
-}
-
-// Готовит Android channel и запрашивает разрешение только при необходимости.
-async function ensureNotificationPermission(): Promise<boolean> {
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync(REST_NOTIFICATION_CHANNEL_ID, {
-      name: 'Таймер отдыха',
-      description: 'Уведомления об окончании отдыха между подходами',
-      importance: Notifications.AndroidImportance.HIGH,
-      enableVibrate: true,
-      vibrationPattern: [0, 500, 250, 500],
-      sound: 'default',
-      lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-    });
-  }
-
-  const current = await Notifications.getPermissionsAsync();
-  if (current.granted) return true;
-
-  const requested = await Notifications.requestPermissionsAsync();
-  return requested.granted;
-}
-
-async function scheduleRestNotification(endTimestamp: number): Promise<string | null> {
-  const permitted = await ensureNotificationPermission();
-  if (!permitted) return null;
-
-  return Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'Отдых закончен',
-      body: 'Пора делать следующий подход',
-      sound: 'default',
-    },
-    trigger: {
-      type: Notifications.SchedulableTriggerInputTypes.DATE,
-      date: endTimestamp,
-      channelId: Platform.OS === 'android' ? REST_NOTIFICATION_CHANNEL_ID : undefined,
-    },
-  });
 }
 
 type Props = {
@@ -99,7 +63,7 @@ export function RestTimer({ initialSeconds, autoStart = false, onClose }: Props)
     const identifier = notificationIdRef.current;
     notificationIdRef.current = null;
     if (identifier) {
-      await Notifications.cancelScheduledNotificationAsync(identifier);
+      await cancelScheduledRestNotification(identifier);
     }
   }, []);
 
@@ -112,7 +76,7 @@ export function RestTimer({ initialSeconds, autoStart = false, onClose }: Props)
     const previousIdentifier = notificationIdRef.current;
     notificationIdRef.current = null;
     if (previousIdentifier) {
-      await Notifications.cancelScheduledNotificationAsync(previousIdentifier);
+      await cancelScheduledRestNotification(previousIdentifier);
     }
 
     if (notificationOperationRef.current !== operation) return;
@@ -120,7 +84,7 @@ export function RestTimer({ initialSeconds, autoStart = false, onClose }: Props)
     try {
       const identifier = await scheduleRestNotification(endTimestamp);
       if (!identifier) {
-        if (notificationOperationRef.current === operation) {
+        if (areNotificationsAvailable() && notificationOperationRef.current === operation) {
           Alert.alert(
             'Уведомления отключены',
             'Таймер продолжит работать, но не сможет сообщить об окончании на заблокированном экране.'
@@ -130,7 +94,7 @@ export function RestTimer({ initialSeconds, autoStart = false, onClose }: Props)
       }
 
       if (notificationOperationRef.current !== operation) {
-        await Notifications.cancelScheduledNotificationAsync(identifier);
+        await cancelScheduledRestNotification(identifier);
         return;
       }
       notificationIdRef.current = identifier;
