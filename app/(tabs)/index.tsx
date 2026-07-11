@@ -65,9 +65,23 @@ function loadSets(
   }));
 }
 
+// Выбирает программу по локальному дню недели устройства.
+function getWorkoutDayForDate(date: Date): WorkoutDay {
+  switch (date.getDay()) {
+    case 1:
+    case 2:
+      return 'mon';
+    case 3:
+    case 4:
+      return 'wed';
+    default:
+      return 'fri';
+  }
+}
+
 export default function WorkoutScreen() {
   const router = useRouter();
-  const [day, setDay] = useState<WorkoutDay>('mon');
+  const [day, setDay] = useState<WorkoutDay>(() => getWorkoutDayForDate(new Date()));
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [inputs, setInputs] = useState<Record<number, SetInputState[]>>({});
   const [stats, setStats] = useState<Record<number, ExerciseStats>>({});
