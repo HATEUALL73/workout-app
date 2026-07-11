@@ -70,3 +70,14 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v56.0.0/ before 
 - `CLAUDE.md` может ссылаться на `AGENTS.md`, но основным источником инструкций для Codex является `AGENTS.md`.
 - `CONTEXT.md` содержит продуктовые требования и исходную программу тренировок.
 - `README.md` сейчас пустой, не использовать его как основной источник документации.
+
+## Product roadmap
+
+Before planning or implementing workout features, read
+`WORKOUT_APP_ROADMAP.md`.
+
+Treat it as the approved product specification.
+
+Implement only one unfinished roadmap item at a time.
+Do not move to the next item without user confirmation.
+Do not implement the entire roadmap in one batch.
