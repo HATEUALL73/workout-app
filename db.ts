@@ -49,6 +49,42 @@ export interface DraftSet {
   reps: number | null;
 }
 
+export type WorkoutDraftSessionStatus = 'active' | 'archived';
+export type WorkoutDraftExerciseStatus = 'not_started' | 'in_progress';
+
+/** Метаданные незавершённой тренировки. */
+export interface WorkoutDraftSession {
+  id: number;
+  workoutDate: string;
+  selectedDay: WorkoutDay;
+  status: WorkoutDraftSessionStatus;
+  updatedAt: string;
+  legacyImported: boolean;
+}
+
+/** Состояние упражнения внутри незавершённой тренировки. */
+export interface WorkoutDraftExercise {
+  sessionId: number;
+  /** Исходный слот упражнения в программе. */
+  slotExerciseId: number;
+  /** Фактически выполняемое упражнение; пока совпадает со slotExerciseId. */
+  exerciseId: number;
+  completedSets: number;
+  status: WorkoutDraftExerciseStatus;
+  replacementReason: string | null;
+  updatedAt: string;
+}
+
+/** Ввод одного подхода внутри новой модели черновика. */
+export interface WorkoutDraftSet {
+  sessionId: number;
+  slotExerciseId: number;
+  setIndex: number;
+  weight: number | null;
+  reps: number | null;
+  updatedAt: string;
+}
+
 /** Ввод одного подхода при отметке «выполнено». */
 export interface SetInput {
   weight: number;
@@ -82,6 +118,34 @@ interface DraftRow {
   set_index: number;
   weight: number | null;
   reps: number | null;
+}
+
+interface WorkoutDraftSessionRow {
+  id: number;
+  workout_date: string;
+  selected_day: string;
+  status: string;
+  updated_at: string;
+  legacy_imported: number;
+}
+
+interface WorkoutDraftExerciseRow {
+  session_id: number;
+  slot_exercise_id: number;
+  exercise_id: number;
+  completed_sets: number;
+  status: string;
+  replacement_reason: string | null;
+  updated_at: string;
+}
+
+interface WorkoutDraftSetRow {
+  session_id: number;
+  slot_exercise_id: number;
+  set_index: number;
+  weight: number | null;
+  reps: number | null;
+  updated_at: string;
 }
 
 // --- Открытие БД (ленивый синглтон) ----------------------------------------
@@ -137,6 +201,53 @@ function mapDraft(r: DraftRow): DraftSet {
     weight: r.weight,
     reps: r.reps,
   };
+}
+
+function mapWorkoutDraftSession(r: WorkoutDraftSessionRow): WorkoutDraftSession {
+  return {
+    id: r.id,
+    workoutDate: r.workout_date,
+    selectedDay: r.selected_day as WorkoutDay,
+    status: r.status as WorkoutDraftSessionStatus,
+    updatedAt: r.updated_at,
+    legacyImported: r.legacy_imported === 1,
+  };
+}
+
+function mapWorkoutDraftExercise(r: WorkoutDraftExerciseRow): WorkoutDraftExercise {
+  return {
+    sessionId: r.session_id,
+    slotExerciseId: r.slot_exercise_id,
+    exerciseId: r.exercise_id,
+    completedSets: r.completed_sets,
+    status: r.status as WorkoutDraftExerciseStatus,
+    replacementReason: r.replacement_reason,
+    updatedAt: r.updated_at,
+  };
+}
+
+function mapWorkoutDraftSet(r: WorkoutDraftSetRow): WorkoutDraftSet {
+  return {
+    sessionId: r.session_id,
+    slotExerciseId: r.slot_exercise_id,
+    setIndex: r.set_index,
+    weight: r.weight,
+    reps: r.reps,
+    updatedAt: r.updated_at,
+  };
+}
+
+function getWorkoutDayForLocalDate(date: Date): WorkoutDay {
+  switch (date.getDay()) {
+    case 1:
+    case 2:
+      return 'mon';
+    case 3:
+    case 4:
+      return 'wed';
+    default:
+      return 'fri';
+  }
 }
 
 // --- Версионирование схемы и пошаговые миграции ------------------------------
@@ -215,9 +326,98 @@ const MIGRATIONS: Migration[] = [
     },
   },
 
+  {
+    // v3 — нормализованный черновик тренировки с метаданными сессии.
+    // Legacy-таблица draft остаётся на месте для безопасного перехода и отката.
+    toVersion: 3,
+    up: (db) => {
+      db.execSync(`
+        CREATE TABLE workout_draft_sessions (
+          id              INTEGER PRIMARY KEY NOT NULL,
+          workout_date    TEXT    NOT NULL,
+          selected_day    TEXT    NOT NULL CHECK (selected_day IN ('mon', 'wed', 'fri')),
+          status          TEXT    NOT NULL DEFAULT 'active'
+                                  CHECK (status IN ('active', 'archived')),
+          updated_at      TEXT    NOT NULL,
+          legacy_imported INTEGER NOT NULL DEFAULT 0
+                                  CHECK (legacy_imported IN (0, 1))
+        );
+
+        CREATE UNIQUE INDEX idx_workout_draft_sessions_single_active
+          ON workout_draft_sessions (status)
+          WHERE status = 'active';
+
+        CREATE TABLE workout_draft_exercises (
+          session_id        INTEGER NOT NULL,
+          slot_exercise_id  INTEGER NOT NULL,
+          exercise_id       INTEGER NOT NULL,
+          completed_sets    INTEGER NOT NULL DEFAULT 0 CHECK (completed_sets >= 0),
+          status            TEXT    NOT NULL DEFAULT 'not_started'
+                                     CHECK (status IN ('not_started', 'in_progress')),
+          replacement_reason TEXT,
+          updated_at        TEXT    NOT NULL,
+          PRIMARY KEY (session_id, slot_exercise_id),
+          FOREIGN KEY (session_id) REFERENCES workout_draft_sessions (id)
+            ON DELETE CASCADE
+        );
+
+        CREATE TABLE workout_draft_sets (
+          session_id       INTEGER NOT NULL,
+          slot_exercise_id INTEGER NOT NULL,
+          set_index        INTEGER NOT NULL CHECK (set_index >= 0),
+          weight           REAL,
+          reps             INTEGER,
+          updated_at       TEXT    NOT NULL,
+          PRIMARY KEY (session_id, slot_exercise_id, set_index),
+          FOREIGN KEY (session_id, slot_exercise_id)
+            REFERENCES workout_draft_exercises (session_id, slot_exercise_id)
+            ON DELETE CASCADE
+        );
+      `);
+
+      const legacyCount = db.getFirstSync<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM draft`
+      )?.count ?? 0;
+      if (legacyCount === 0) return;
+
+      const now = new Date();
+      const updatedAt = now.toISOString();
+      const sessionResult = db.runSync(
+        `INSERT INTO workout_draft_sessions
+           (workout_date, selected_day, status, updated_at, legacy_imported)
+         VALUES ($workoutDate, $selectedDay, 'active', $updatedAt, 1)`,
+        {
+          $workoutDate: todayISO(),
+          $selectedDay: getWorkoutDayForLocalDate(now),
+          $updatedAt: updatedAt,
+        }
+      );
+      const sessionId = sessionResult.lastInsertRowId;
+
+      db.runSync(
+        `INSERT INTO workout_draft_exercises
+           (session_id, slot_exercise_id, exercise_id, completed_sets,
+            status, replacement_reason, updated_at)
+         SELECT $sessionId, exercise_id, exercise_id, 0,
+                'in_progress', NULL, $updatedAt
+         FROM draft
+         GROUP BY exercise_id`,
+        { $sessionId: sessionId, $updatedAt: updatedAt }
+      );
+
+      db.runSync(
+        `INSERT INTO workout_draft_sets
+           (session_id, slot_exercise_id, set_index, weight, reps, updated_at)
+         SELECT $sessionId, exercise_id, set_index, weight, reps, $updatedAt
+         FROM draft`,
+        { $sessionId: sessionId, $updatedAt: updatedAt }
+      );
+    },
+  },
+
   // --- Пример будущей миграции (раскомментируйте и адаптируйте) ---
   // {
-  //   toVersion: 3,
+  //   toVersion: 4,
   //   up: (db) => {
   //     db.execSync(`ALTER TABLE exercises ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
   //   },
@@ -521,9 +721,10 @@ export function logCompletedExercise(
   });
 
   let newId = 0;
-  getDb().withTransactionSync(() => {
+  const database = getDb();
+  database.withTransactionSync(() => {
     newId = insertLog({ exerciseId, date, weight: heaviest.weight, reps: heaviest.reps });
-    clearDraftForExercise(exerciseId);
+    clearDraftForExerciseRows(database, exerciseId);
   });
 
   return { id: newId, exerciseId, date, weight: heaviest.weight, reps: heaviest.reps };
@@ -547,11 +748,236 @@ export function getLatestLog(exerciseId: number): LogEntry | null {
   return row ? mapLog(row) : null;
 }
 
+// --- Нормализованный черновик тренировки -----------------------------------
+
+export function createWorkoutDraftSession(input: {
+  workoutDate: string;
+  selectedDay: WorkoutDay;
+  updatedAt?: string;
+  legacyImported?: boolean;
+}): WorkoutDraftSession {
+  const updatedAt = input.updatedAt ?? new Date().toISOString();
+  const result = getDb().runSync(
+    `INSERT INTO workout_draft_sessions
+       (workout_date, selected_day, status, updated_at, legacy_imported)
+     VALUES ($workoutDate, $selectedDay, 'active', $updatedAt, $legacyImported)`,
+    {
+      $workoutDate: input.workoutDate,
+      $selectedDay: input.selectedDay,
+      $updatedAt: updatedAt,
+      $legacyImported: input.legacyImported ? 1 : 0,
+    }
+  );
+  return {
+    id: result.lastInsertRowId,
+    workoutDate: input.workoutDate,
+    selectedDay: input.selectedDay,
+    status: 'active',
+    updatedAt,
+    legacyImported: input.legacyImported ?? false,
+  };
+}
+
+export function getWorkoutDraftSession(sessionId: number): WorkoutDraftSession | null {
+  const row = getDb().getFirstSync<WorkoutDraftSessionRow>(
+    `SELECT * FROM workout_draft_sessions WHERE id = $sessionId`,
+    { $sessionId: sessionId }
+  );
+  return row ? mapWorkoutDraftSession(row) : null;
+}
+
+export function getActiveWorkoutDraftSession(): WorkoutDraftSession | null {
+  const row = getDb().getFirstSync<WorkoutDraftSessionRow>(
+    `SELECT * FROM workout_draft_sessions WHERE status = 'active' LIMIT 1`
+  );
+  return row ? mapWorkoutDraftSession(row) : null;
+}
+
+export function updateWorkoutDraftSession(
+  sessionId: number,
+  updates: {
+    selectedDay?: WorkoutDay;
+    status?: WorkoutDraftSessionStatus;
+    updatedAt?: string;
+  }
+): void {
+  const current = getWorkoutDraftSession(sessionId);
+  if (!current) return;
+
+  getDb().runSync(
+    `UPDATE workout_draft_sessions
+     SET selected_day = $selectedDay,
+         status = $status,
+         updated_at = $updatedAt
+     WHERE id = $sessionId`,
+    {
+      $sessionId: sessionId,
+      $selectedDay: updates.selectedDay ?? current.selectedDay,
+      $status: updates.status ?? current.status,
+      $updatedAt: updates.updatedAt ?? new Date().toISOString(),
+    }
+  );
+}
+
+export function deleteWorkoutDraftSession(sessionId: number): void {
+  const database = getDb();
+  database.withTransactionSync(() => {
+    const session = database.getFirstSync<WorkoutDraftSessionRow>(
+      `SELECT * FROM workout_draft_sessions WHERE id = $sessionId`,
+      { $sessionId: sessionId }
+    );
+    if (!session) return;
+
+    if (session.status === 'active') {
+      database.runSync(`DELETE FROM draft`);
+    }
+    database.runSync(`DELETE FROM workout_draft_sessions WHERE id = $sessionId`, {
+      $sessionId: sessionId,
+    });
+  });
+}
+
+export function saveWorkoutDraftExercise(exercise: WorkoutDraftExercise): void {
+  getDb().runSync(
+    `INSERT INTO workout_draft_exercises
+       (session_id, slot_exercise_id, exercise_id, completed_sets,
+        status, replacement_reason, updated_at)
+     VALUES ($sessionId, $slotExerciseId, $exerciseId, $completedSets,
+             $status, $replacementReason, $updatedAt)
+     ON CONFLICT (session_id, slot_exercise_id)
+     DO UPDATE SET
+       exercise_id = excluded.exercise_id,
+       completed_sets = excluded.completed_sets,
+       status = excluded.status,
+       replacement_reason = excluded.replacement_reason,
+       updated_at = excluded.updated_at`,
+    {
+      $sessionId: exercise.sessionId,
+      $slotExerciseId: exercise.slotExerciseId,
+      $exerciseId: exercise.exerciseId,
+      $completedSets: exercise.completedSets,
+      $status: exercise.status,
+      $replacementReason: exercise.replacementReason,
+      $updatedAt: exercise.updatedAt,
+    }
+  );
+}
+
+export function getWorkoutDraftExercises(sessionId: number): WorkoutDraftExercise[] {
+  const rows = getDb().getAllSync<WorkoutDraftExerciseRow>(
+    `SELECT * FROM workout_draft_exercises
+     WHERE session_id = $sessionId
+     ORDER BY slot_exercise_id`,
+    { $sessionId: sessionId }
+  );
+  return rows.map(mapWorkoutDraftExercise);
+}
+
+export function deleteWorkoutDraftExercise(sessionId: number, slotExerciseId: number): void {
+  const database = getDb();
+  database.withTransactionSync(() => {
+    const session = database.getFirstSync<WorkoutDraftSessionRow>(
+      `SELECT * FROM workout_draft_sessions WHERE id = $sessionId`,
+      { $sessionId: sessionId }
+    );
+    database.runSync(
+      `DELETE FROM workout_draft_exercises
+       WHERE session_id = $sessionId AND slot_exercise_id = $slotExerciseId`,
+      { $sessionId: sessionId, $slotExerciseId: slotExerciseId }
+    );
+    if (session?.status === 'active') {
+      database.runSync(`DELETE FROM draft WHERE exercise_id = $exerciseId`, {
+        $exerciseId: slotExerciseId,
+      });
+    }
+  });
+}
+
+export function saveWorkoutDraftSet(set: WorkoutDraftSet): void {
+  const database = getDb();
+  database.withTransactionSync(() => {
+    database.runSync(
+      `INSERT INTO workout_draft_sets
+         (session_id, slot_exercise_id, set_index, weight, reps, updated_at)
+       VALUES ($sessionId, $slotExerciseId, $setIndex, $weight, $reps, $updatedAt)
+       ON CONFLICT (session_id, slot_exercise_id, set_index)
+       DO UPDATE SET
+         weight = excluded.weight,
+         reps = excluded.reps,
+         updated_at = excluded.updated_at`,
+      {
+        $sessionId: set.sessionId,
+        $slotExerciseId: set.slotExerciseId,
+        $setIndex: set.setIndex,
+        $weight: set.weight,
+        $reps: set.reps,
+        $updatedAt: set.updatedAt,
+      }
+    );
+
+    const session = database.getFirstSync<WorkoutDraftSessionRow>(
+      `SELECT * FROM workout_draft_sessions WHERE id = $sessionId`,
+      { $sessionId: set.sessionId }
+    );
+    if (session?.status === 'active') {
+      upsertLegacyDraftSet(database, {
+        exerciseId: set.slotExerciseId,
+        setIndex: set.setIndex,
+        weight: set.weight,
+        reps: set.reps,
+      });
+    }
+  });
+}
+
+export function getWorkoutDraftSets(
+  sessionId: number,
+  slotExerciseId: number
+): WorkoutDraftSet[] {
+  const rows = getDb().getAllSync<WorkoutDraftSetRow>(
+    `SELECT * FROM workout_draft_sets
+     WHERE session_id = $sessionId AND slot_exercise_id = $slotExerciseId
+     ORDER BY set_index`,
+    { $sessionId: sessionId, $slotExerciseId: slotExerciseId }
+  );
+  return rows.map(mapWorkoutDraftSet);
+}
+
+export function deleteWorkoutDraftSet(
+  sessionId: number,
+  slotExerciseId: number,
+  setIndex: number
+): void {
+  const database = getDb();
+  database.withTransactionSync(() => {
+    database.runSync(
+      `DELETE FROM workout_draft_sets
+       WHERE session_id = $sessionId
+         AND slot_exercise_id = $slotExerciseId
+         AND set_index = $setIndex`,
+      {
+        $sessionId: sessionId,
+        $slotExerciseId: slotExerciseId,
+        $setIndex: setIndex,
+      }
+    );
+    const session = database.getFirstSync<WorkoutDraftSessionRow>(
+      `SELECT * FROM workout_draft_sessions WHERE id = $sessionId`,
+      { $sessionId: sessionId }
+    );
+    if (session?.status === 'active') {
+      database.runSync(
+        `DELETE FROM draft WHERE exercise_id = $exerciseId AND set_index = $setIndex`,
+        { $exerciseId: slotExerciseId, $setIndex: setIndex }
+      );
+    }
+  });
+}
+
 // --- Черновик (текущий незавершённый ввод) ----------------------------------
 
-/** Сохраняет/обновляет ввод одного подхода (upsert по exercise_id + set_index). */
-export function saveDraftSet(draft: DraftSet): void {
-  getDb().runSync(
+function upsertLegacyDraftSet(database: SQLite.SQLiteDatabase, draft: DraftSet): void {
+  database.runSync(
     `INSERT INTO draft (exercise_id, set_index, weight, reps)
      VALUES ($exerciseId, $setIndex, $weight, $reps)
      ON CONFLICT (exercise_id, set_index)
@@ -563,6 +989,115 @@ export function saveDraftSet(draft: DraftSet): void {
       $reps: draft.reps,
     }
   );
+}
+
+function saveNormalizedDraftSetFromLegacyInput(
+  database: SQLite.SQLiteDatabase,
+  draft: DraftSet,
+  updatedAt: string
+): void {
+  const exercise = database.getFirstSync<{ day: string }>(
+    `SELECT day FROM exercises WHERE id = $exerciseId`,
+    { $exerciseId: draft.exerciseId }
+  );
+  if (!exercise) return;
+
+  let session = database.getFirstSync<WorkoutDraftSessionRow>(
+    `SELECT * FROM workout_draft_sessions WHERE status = 'active' LIMIT 1`
+  );
+  if (!session) {
+    const result = database.runSync(
+      `INSERT INTO workout_draft_sessions
+         (workout_date, selected_day, status, updated_at, legacy_imported)
+       VALUES ($workoutDate, $selectedDay, 'active', $updatedAt, 0)`,
+      {
+        $workoutDate: todayISO(),
+        $selectedDay: exercise.day,
+        $updatedAt: updatedAt,
+      }
+    );
+    session = {
+      id: result.lastInsertRowId,
+      workout_date: todayISO(),
+      selected_day: exercise.day,
+      status: 'active',
+      updated_at: updatedAt,
+      legacy_imported: 0,
+    };
+  } else {
+    database.runSync(
+      `UPDATE workout_draft_sessions
+       SET selected_day = $selectedDay, updated_at = $updatedAt
+       WHERE id = $sessionId`,
+      {
+        $sessionId: session.id,
+        $selectedDay: exercise.day,
+        $updatedAt: updatedAt,
+      }
+    );
+  }
+
+  database.runSync(
+    `INSERT INTO workout_draft_exercises
+       (session_id, slot_exercise_id, exercise_id, completed_sets,
+        status, replacement_reason, updated_at)
+     VALUES ($sessionId, $exerciseId, $exerciseId, 0,
+             'in_progress', NULL, $updatedAt)
+     ON CONFLICT (session_id, slot_exercise_id)
+     DO UPDATE SET
+       exercise_id = excluded.exercise_id,
+       status = 'in_progress',
+       updated_at = excluded.updated_at`,
+    {
+      $sessionId: session.id,
+      $exerciseId: draft.exerciseId,
+      $updatedAt: updatedAt,
+    }
+  );
+
+  database.runSync(
+    `INSERT INTO workout_draft_sets
+       (session_id, slot_exercise_id, set_index, weight, reps, updated_at)
+     VALUES ($sessionId, $exerciseId, $setIndex, $weight, $reps, $updatedAt)
+     ON CONFLICT (session_id, slot_exercise_id, set_index)
+     DO UPDATE SET
+       weight = excluded.weight,
+       reps = excluded.reps,
+       updated_at = excluded.updated_at`,
+    {
+      $sessionId: session.id,
+      $exerciseId: draft.exerciseId,
+      $setIndex: draft.setIndex,
+      $weight: draft.weight,
+      $reps: draft.reps,
+      $updatedAt: updatedAt,
+    }
+  );
+}
+
+function clearDraftForExerciseRows(
+  database: SQLite.SQLiteDatabase,
+  exerciseId: number
+): void {
+  database.runSync(`DELETE FROM draft WHERE exercise_id = $id`, { $id: exerciseId });
+  database.runSync(
+    `DELETE FROM workout_draft_exercises
+     WHERE slot_exercise_id = $id
+       AND session_id IN (
+         SELECT id FROM workout_draft_sessions WHERE status = 'active'
+       )`,
+    { $id: exerciseId }
+  );
+}
+
+/** Сохраняет/обновляет ввод одного подхода (upsert по exercise_id + set_index). */
+export function saveDraftSet(draft: DraftSet): void {
+  const database = getDb();
+  const updatedAt = new Date().toISOString();
+  database.withTransactionSync(() => {
+    upsertLegacyDraftSet(database, draft);
+    saveNormalizedDraftSetFromLegacyInput(database, draft, updatedAt);
+  });
 }
 
 /** Черновик подходов одного упражнения, по порядку подходов. */
@@ -584,10 +1119,17 @@ export function getAllDrafts(): DraftSet[] {
 
 /** Очищает черновик одного упражнения. */
 export function clearDraftForExercise(exerciseId: number): void {
-  getDb().runSync(`DELETE FROM draft WHERE exercise_id = $id`, { $id: exerciseId });
+  const database = getDb();
+  database.withTransactionSync(() => {
+    clearDraftForExerciseRows(database, exerciseId);
+  });
 }
 
 /** Очищает весь черновик (например, при завершении тренировки). */
 export function clearAllDrafts(): void {
-  getDb().runSync(`DELETE FROM draft`);
+  const database = getDb();
+  database.withTransactionSync(() => {
+    database.runSync(`DELETE FROM draft`);
+    database.runSync(`DELETE FROM workout_draft_sessions WHERE status = 'active'`);
+  });
 }
